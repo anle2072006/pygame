@@ -1,6 +1,6 @@
 def read_map(filepath):
     grid =[]
-    with open(filepath, 'r') as f:#with giúp tự động đóng file sau khi đọc xong tránh lãng phí tài nguyên
+    with open(filepath, 'r') as f: #with giúp tự động đóng file sau khi đọc xong tránh lãng phí tài nguyên
         for line in f:
             row = line.rstrip('\r\n') #chỉ bỏ ký tư xuống dòng k bỏ các khoảng trắng tránh bị hư hỏng ma trận
             grid.append(row)
