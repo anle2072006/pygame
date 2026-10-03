@@ -1,4 +1,3 @@
-import heapq
 import time
 from board_2 import wall
 
@@ -8,6 +7,17 @@ DIRECTIONS = {
     'East': (1, 0),
     'West': (-1, 0)
 }
+
+OPPOSITE = {
+    'North': 'South',
+    'South': 'North',
+    'East': 'West',
+    'West': 'East'
+}
+
+recent_actions = []
+last_pos = None
+stuck_count = 0
 
 def get_manhattan(p1, p2):
     return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
@@ -20,8 +30,9 @@ def get_safe_neighbors(grid, pos, obstacles):
             neighbors.append((act, nxt))
     return neighbors
 
-def find_path_bfs(grid, start, target, obstacles, max_time=0.8):
-    """Tìm đường nhanh bằng BFS có time-limit"""
+def find_path_bfs(grid, start, target, obstacles, max_time=0.7):
+    if start == target:
+        return []
     start_time = time.time()
     queue = [(start, [])]
     visited = {start}
@@ -37,51 +48,86 @@ def find_path_bfs(grid, start, target, obstacles, max_time=0.8):
             if nxt not in visited:
                 visited.add(nxt)
                 queue.append((nxt, path + [act]))
-    return []
+    return None
 
 def get_next_action(grid, my_pos, opponent_pos, boxes, goals, remaining_steps):
-    """
-    Agent 2: Ra quyết định trong < 1000ms.
-    """
+    global recent_actions, last_pos, stuck_count
+
+    if my_pos == last_pos:
+        stuck_count += 1
+    else:
+        stuck_count = 0
+    last_pos = my_pos
+
     obstacles = set(boxes) | {opponent_pos}
+
+    candidates = []
+    for act, (dx, dy) in DIRECTIONS.items():
+        nxt = (my_pos[0] + dx, my_pos[1] + dy)
+        if not wall(grid, nxt[0], nxt[1]) and nxt not in obstacles:
+            candidates.append((act, nxt))
+
+    if stuck_count >= 2 or get_manhattan(my_pos, opponent_pos) == 1:
+        valid_evades = [
+            act for act, nxt in candidates 
+            if get_manhattan(nxt, opponent_pos) >= get_manhattan(my_pos, opponent_pos)
+        ]
+        if valid_evades:
+            action = valid_evades[-1]
+            recent_actions.append(action)
+            return action
 
     sorted_boxes = sorted(boxes, key=lambda b: get_manhattan(my_pos, b))
     if not sorted_boxes:
         return 'Wait'
 
-    target_box = sorted_boxes[0]
-    sorted_goals = sorted(goals, key=lambda g: get_manhattan(target_box, g))
-    target_goal = sorted_goals[0] if sorted_goals else target_box
-
-    best_push_action = None
+    best_plan = None
     min_dist = float('inf')
-    push_stand_pos = None
 
-    for act, (dx, dy) in DIRECTIONS.items():
-        box_next = (target_box[0] + dx, target_box[1] + dy)
-        stand_pos = (target_box[0] - dx, target_box[1] - dy)
+    for b in sorted_boxes:
+        sorted_goals = sorted(goals, key=lambda g: get_manhattan(b, g))
+        g = sorted_goals[0] if sorted_goals else b
 
-        if not wall(grid, stand_pos[0], stand_pos[1]) and stand_pos != opponent_pos:
-            if not wall(grid, box_next[0], box_next[1]) and box_next not in boxes and box_next != opponent_pos:
-                dist = get_manhattan(box_next, target_goal)
-                if dist < min_dist:
-                    min_dist = dist
-                    best_push_action = act
-                    push_stand_pos = stand_pos
+        for act, (dx, dy) in DIRECTIONS.items():
+            box_next = (b[0] + dx, b[1] + dy)
+            stand_pos = (b[0] - dx, b[1] - dy)
 
-    if my_pos == push_stand_pos and best_push_action:
-        return best_push_action
+            if wall(grid, stand_pos[0], stand_pos[1]) or stand_pos in obstacles:
+                if stand_pos != my_pos:
+                    continue
+            if wall(grid, box_next[0], box_next[1]) or box_next in boxes or box_next == opponent_pos:
+                continue
 
-    target_pos = push_stand_pos if push_stand_pos else target_box
-    clean_obs = obstacles - {target_pos}
-    path = find_path_bfs(grid, my_pos, target_pos, clean_obs, max_time=0.6)
+            cost = get_manhattan(my_pos, stand_pos) + get_manhattan(box_next, g)
+            if get_manhattan(stand_pos, opponent_pos) <= 1:
+                cost += 5
 
-    if path:
-        return path[0]
+            if cost < min_dist:
+                path = find_path_bfs(grid, my_pos, stand_pos, obstacles, max_time=0.08)
+                if path is not None:
+                    min_dist = cost
+                    best_plan = (act, stand_pos, path)
 
-    for act, (dx, dy) in DIRECTIONS.items():
-        nxt = (my_pos[0] + dx, my_pos[1] + dy)
-        if not wall(grid, nxt[0], nxt[1]) and nxt not in obstacles:
-            return act
+        if best_plan:
+            break
 
-    return 'Wait'
+    action = 'Wait'
+
+    if best_plan:
+        act, stand_pos, path = best_plan
+        if my_pos == stand_pos:
+            action = act
+        elif path:
+            action = path[0]
+    else:
+        last_act = recent_actions[-1] if recent_actions else None
+        forbidden = OPPOSITE.get(last_act)
+        cand_acts = [a for a, _ in candidates]
+        valid_candidates = [a for a in cand_acts if a != forbidden]
+        action = valid_candidates[0] if valid_candidates else (cand_acts[0] if cand_acts else 'Wait')
+
+    recent_actions.append(action)
+    if len(recent_actions) > 10:
+        recent_actions.pop(0)
+
+    return action

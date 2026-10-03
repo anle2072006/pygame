@@ -9,6 +9,17 @@ DIRECTIONS = {
     'West': (-1, 0)
 }
 
+OPPOSITE = {
+    'North': 'South',
+    'South': 'North',
+    'East': 'West',
+    'West': 'East'
+}
+
+recent_actions = []
+last_pos = None
+stuck_count = 0
+
 def get_manhattan(p1, p2):
     return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
@@ -20,8 +31,9 @@ def get_neighbors(grid, pos, obstacles):
             neighbors.append((act, nxt))
     return neighbors
 
-def find_path_astar(grid, start, target, obstacles, max_time=0.8):
-    """Tìm đường ngắn nhất từ start đến target bằng A* tránh obstacles"""
+def find_path_astar(grid, start, target, obstacles, max_time=0.7):
+    if start == target:
+        return []
     start_time = time.time()
     pq = [(get_manhattan(start, target), 0, start, [])]
     visited = {start: 0}
@@ -39,64 +51,86 @@ def find_path_astar(grid, start, target, obstacles, max_time=0.8):
                 visited[nxt] = new_cost
                 priority = new_cost + get_manhattan(nxt, target)
                 heapq.heappush(pq, (priority, new_cost, nxt, path + [act]))
-    return []
+    return None
 
 def get_next_action(grid, my_pos, opponent_pos, boxes, goals, remaining_steps):
-    """
-    Quyết định hành động tiếp theo trong vòng dưới 1000ms.
-    Trả về: 'North', 'South', 'East', 'West', hoặc 'Wait'
-    """
+    global recent_actions, last_pos, stuck_count
+
+    if my_pos == last_pos:
+        stuck_count += 1
+    else:
+        stuck_count = 0
+    last_pos = my_pos
+
     obstacles = set(boxes) | {opponent_pos}
-    unplaced_boxes = [b for b in boxes if b not in goals]
-    unoccupied_goals = [g for g in goals if g not in boxes]
 
-    candidate_boxes = unplaced_boxes if unplaced_boxes else list(boxes)
-    candidate_goals = unoccupied_goals if unoccupied_goals else list(goals)
-
-    if not candidate_boxes or not candidate_goals:
-        return 'Wait'
-
-    best_pair = None
-    min_dist = float('inf')
-
-    for b in candidate_boxes:
-        for g in candidate_goals:
-            d = get_manhattan(my_pos, b) + get_manhattan(b, g)
-            if d < min_dist:
-                min_dist = d
-                best_pair = (b, g)
-
-    target_box, target_goal = best_pair
-
-    best_push_action = None
-    min_box_goal_dist = float('inf')
-    push_stand_pos = None
-
-    for act, (dx, dy) in DIRECTIONS.items():
-        box_next = (target_box[0] + dx, target_box[1] + dy)
-        stand_pos = (target_box[0] - dx, target_box[1] - dy)
-
-        if not wall(grid, stand_pos[0], stand_pos[1]) and stand_pos != opponent_pos:
-            if not wall(grid, box_next[0], box_next[1]) and box_next not in boxes and box_next != opponent_pos:
-                dist = get_manhattan(box_next, target_goal)
-                if dist < min_box_goal_dist:
-                    min_box_goal_dist = dist
-                    best_push_action = act
-                    push_stand_pos = stand_pos
-
-    if my_pos == push_stand_pos and best_push_action:
-        return best_push_action
-
-    target_pos = push_stand_pos if push_stand_pos else target_box
-    clean_obs = obstacles - {target_pos}
-    path = find_path_astar(grid, my_pos, target_pos, clean_obs, max_time=0.6)
-
-    if path:
-        return path[0]
-
+    candidates = []
     for act, (dx, dy) in DIRECTIONS.items():
         nxt = (my_pos[0] + dx, my_pos[1] + dy)
         if not wall(grid, nxt[0], nxt[1]) and nxt not in obstacles:
-            return act
+            candidates.append((act, nxt))
 
-    return 'Wait'
+    if stuck_count >= 2 or get_manhattan(my_pos, opponent_pos) == 1:
+        valid_evades = [
+            act for act, nxt in candidates 
+            if get_manhattan(nxt, opponent_pos) >= get_manhattan(my_pos, opponent_pos)
+        ]
+        if valid_evades:
+            action = valid_evades[0]
+            recent_actions.append(action)
+            return action
+
+    unplaced_boxes = [b for b in boxes if b not in goals]
+    unoccupied_goals = [g for g in goals if g not in boxes]
+
+    target_boxes = unplaced_boxes if unplaced_boxes else list(boxes)
+    target_goals = unoccupied_goals if unoccupied_goals else list(goals)
+
+    if not target_boxes or not target_goals:
+        return 'Wait'
+
+    best_plan = None
+    min_total_cost = float('inf')
+
+    for b in target_boxes:
+        for g in target_goals:
+            for act, (dx, dy) in DIRECTIONS.items():
+                box_next = (b[0] + dx, b[1] + dy)
+                stand_pos = (b[0] - dx, b[1] - dy)
+
+                if wall(grid, stand_pos[0], stand_pos[1]) or stand_pos in obstacles:
+                    if stand_pos != my_pos:
+                        continue
+                if wall(grid, box_next[0], box_next[1]) or box_next in boxes or box_next == opponent_pos:
+                    continue
+
+                cost = get_manhattan(my_pos, stand_pos) + get_manhattan(box_next, g) * 2
+                if get_manhattan(stand_pos, opponent_pos) <= 1:
+                    cost += 5
+
+                if cost < min_total_cost:
+                    path = find_path_astar(grid, my_pos, stand_pos, obstacles, max_time=0.08)
+                    if path is not None:
+                        min_total_cost = cost
+                        best_plan = (act, stand_pos, path)
+
+    action = 'Wait'
+
+    if best_plan:
+        act, stand_pos, path = best_plan
+        if my_pos == stand_pos:
+            action = act
+        elif path:
+            action = path[0]
+    else:
+        last_act = recent_actions[-1] if recent_actions else None
+        forbidden = OPPOSITE.get(last_act)
+        cand_acts = [a for a, _ in candidates]
+        valid_candidates = [a for a in cand_acts if a != forbidden]
+        action = valid_candidates[0] if valid_candidates else (cand_acts[0] if cand_acts else 'Wait')
+
+    recent_actions.append(action)
+    if len(recent_actions) > 10:
+        recent_actions.pop(0)
+
+    return action
