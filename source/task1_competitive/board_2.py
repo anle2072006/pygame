@@ -1,4 +1,3 @@
-
 def read_map(filepath):
     grid = []
     with open(filepath, 'r') as f:
